@@ -1,0 +1,22 @@
+{
+  "name": "tip3send",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "ts-node index.ts",
+    "build": "tsc",
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "everscale-inpage-provider": "^0.6.3",
+    "everscale-standalone-client": "^2.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^4.7.4"
+  }
+}
