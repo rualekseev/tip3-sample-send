@@ -1,8 +1,9 @@
-import { ProviderRpcClient, Address } from "everscale-inpage-provider";
+import { ProviderRpcClient, Address, serializeTokensObject } from "everscale-inpage-provider";
 import {
   EverscaleStandaloneClient,
   SimpleKeystore,
 } from "everscale-standalone-client/nodejs";
+import * as nt from "nekoton-wasm/node";
 
 // DO NOT STORE PRIVATE KEYS IN THE CODE — THIS IS FOR DEMONSTRATION PURPOSES ONLY.
 const SecretKey = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -215,6 +216,63 @@ function createTokenTransferSender(context: WalletInfo) {
   };
 }
 
+function createBuildExtMessage(context: WalletInfo) {
+  return async function buildExtMessage(
+    recipient: Address,
+    senderTokenWalletAddress: Address,
+    amount: string,
+    payloadText: string,
+  ): Promise<void> {
+    const tokenWalletContract = new rpcClient.Contract(
+      TokenWalletAbi,
+      senderTokenWalletAddress,
+    );
+    const payloadCell = await buildPayloadCell(payloadText);
+    const payload = await tokenWalletContract.methods
+      .transfer({
+        amount,
+        recipient,
+        deployWalletValue: "120000000",
+        remainingGasTo: context.address,
+        notify: true,
+        payload: payloadCell,
+      })
+      .encodeInternal();
+
+    const clock = new nt.ClockWithOffset();
+    const nowMs = clock.nowMs;
+    const now = ~~(nowMs/1000);
+    
+    const body = {
+      dest: senderTokenWalletAddress,
+      value: "200000000",
+      bounce: true,
+      flags: 3,
+      payload: payload,
+    };
+
+    const unsignedMessage =  nt.createExternalMessage(
+      clock,
+      nt.repackAddress(context.address.toString()),
+      JSON.stringify(EverWalletAbi), 
+      "sendTransaction",
+      null,
+      serializeTokensObject(body),
+      WalletPublicKey,
+      now+50
+    )
+
+    const signer = await keystore.getSigner(WalletPublicKey);
+    if (signer == null) {
+      throw 'Signer not found for public key';
+    }
+    const signature = await signer.sign(unsignedMessage.hash, 2000);
+    const message = unsignedMessage.sign(signature).boc;
+
+    console.log("Message BOC: ", message);
+  };
+}
+
 async function getTokenWalletAddress(
   rootAddr: Address,
   receiverAddr: Address,
@@ -256,6 +314,16 @@ async function myApp() {
   //   "1000",
   //   "test_test_test",
   // );
+
+  const buildExtMessage = createBuildExtMessage(walletInfo); 
+  // await buildExtMessage(
+  //   ReceiverAddr,
+  //   senderTokenWalletAddress,
+  //   "10000",
+  //   "test_test_test",
+  // );
+
+
 }
 
 myApp().catch(console.error);

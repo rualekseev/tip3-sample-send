@@ -1,4 +1,3 @@
-"use strict";
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -8,15 +7,15 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-Object.defineProperty(exports, "__esModule", { value: true });
-const everscale_inpage_provider_1 = require("everscale-inpage-provider");
-const nodejs_1 = require("everscale-standalone-client/nodejs");
+import { ProviderRpcClient, Address, serializeTokensObject } from "everscale-inpage-provider";
+import { EverscaleStandaloneClient, SimpleKeystore, } from "everscale-standalone-client/nodejs";
+import * as nt from "nekoton-wasm/node";
 // DO NOT STORE PRIVATE KEYS IN THE CODE — THIS IS FOR DEMONSTRATION PURPOSES ONLY.
 const SecretKey = "0000000000000000000000000000000000000000000000000000000000000000";
 const WalletPublicKey = "0000000000000000000000000000000000000000000000000000000000000000";
 // MBSR root address
-const RootAddr = new everscale_inpage_provider_1.Address("0:8305ee8616735691da2d329aa28ec6f81eabe7f0204be48a671cf2be18e0f02b");
-const ReceiverAddr = new everscale_inpage_provider_1.Address("0:1724337257887bace16fe318d52f3dfeb67ba91ae6f1b40b05849b9094855146");
+const RootAddr = new Address("0:8305ee8616735691da2d329aa28ec6f81eabe7f0204be48a671cf2be18e0f02b");
+const ReceiverAddr = new Address("0:0000000000000000000000000000000000000000000000000000000000000000");
 // This is the code of a wallet smart contract.
 // https://github.com/broxus/ever-wallet-contract
 const EverWalletCode = "te6cckEBBgEA/AABFP8A9KQT9LzyyAsBAgEgAgMABNIwAubycdcBAcAA8nqDCNcY7UTQgwfXAdcLP8j4KM8WI88WyfkAA3HXAQHDAJqDB9cBURO68uBk3oBA1wGAINcBgCDXAVQWdfkQ8qj4I7vyeWa++COBBwiggQPoqFIgvLHydAIgghBM7mRsuuMPAcjL/8s/ye1UBAUAmDAC10zQ+kCDBtcBcdcBeNcB10z4AHCAEASqAhSxyMsFUAXPFlAD+gLLaSLQIc8xIddJoIQJuZgzcAHLAFjPFpcwcQHLABLM4skB+wAAPoIQFp4+EbqOEfgAApMg10qXeNcB1AL7AOjRkzLyPOI+zYS/";
@@ -75,14 +74,14 @@ const TokenRootAbi = {
     ],
     events: [],
 };
-const keystore = new nodejs_1.SimpleKeystore({
+const keystore = new SimpleKeystore({
     0: {
         publicKey: WalletPublicKey,
         secretKey: SecretKey,
     },
 });
-const rpcClient = new everscale_inpage_provider_1.ProviderRpcClient({
-    provider: nodejs_1.EverscaleStandaloneClient.create({
+const rpcClient = new ProviderRpcClient({
+    provider: EverscaleStandaloneClient.create({
         connection: {
             // msharia chain id = 10000001
             id: 10000001,
@@ -113,7 +112,7 @@ function getWalletInfo() {
         });
         const { tvc } = yield rpcClient.mergeTvc({ data, code: EverWalletCode });
         const walletBocHash = yield rpcClient.getBocHash(tvc);
-        const address = new everscale_inpage_provider_1.Address(`0:${walletBocHash}`);
+        const address = new Address(`0:${walletBocHash}`);
         const state = yield rpcClient.getFullContractState({ address });
         const isDeployed = Boolean((_a = state === null || state === void 0 ? void 0 : state.state) === null || _a === void 0 ? void 0 : _a.isDeployed);
         return {
@@ -189,6 +188,42 @@ function createTokenTransferSender(context) {
         });
     };
 }
+function createBuildExtMessage(context) {
+    return function buildExtMessage(recipient, senderTokenWalletAddress, amount, payloadText) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const tokenWalletContract = new rpcClient.Contract(TokenWalletAbi, senderTokenWalletAddress);
+            const payloadCell = yield buildPayloadCell(payloadText);
+            const payload = yield tokenWalletContract.methods
+                .transfer({
+                amount,
+                recipient,
+                deployWalletValue: "120000000",
+                remainingGasTo: context.address,
+                notify: true,
+                payload: payloadCell,
+            })
+                .encodeInternal();
+            const clock = new nt.ClockWithOffset();
+            const nowMs = clock.nowMs;
+            const now = ~~(nowMs / 1000);
+            const body = {
+                dest: senderTokenWalletAddress,
+                value: "200000000",
+                bounce: true,
+                flags: 3,
+                payload: payload,
+            };
+            const unsignedMessage = nt.createExternalMessage(clock, nt.repackAddress(context.address.toString()), JSON.stringify(EverWalletAbi), "sendTransaction", null, serializeTokensObject(body), WalletPublicKey, now + 50);
+            const signer = yield keystore.getSigner(WalletPublicKey);
+            if (signer == null) {
+                throw 'Signer not found for public key';
+            }
+            const signature = yield signer.sign(unsignedMessage.hash, 2000);
+            const message = unsignedMessage.sign(signature).boc;
+            console.log("Message BOC: ", message);
+        });
+    };
+}
 function getTokenWalletAddress(rootAddr, receiverAddr) {
     return __awaiter(this, void 0, void 0, function* () {
         const rootContract = new rpcClient.Contract(TokenRootAbi, rootAddr);
@@ -216,6 +251,13 @@ function myApp() {
         //   ReceiverAddr,
         //   senderTokenWalletAddress,
         //   "1000",
+        //   "test_test_test",
+        // );
+        const buildExtMessage = createBuildExtMessage(walletInfo);
+        // await buildExtMessage(
+        //   ReceiverAddr,
+        //   senderTokenWalletAddress,
+        //   "10000",
         //   "test_test_test",
         // );
     });
